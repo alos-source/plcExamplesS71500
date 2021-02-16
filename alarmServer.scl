@@ -1,0 +1,355 @@
+﻿TYPE "alarmMessage"
+TITLE = alarmMessage
+VERSION : 0.1
+//Defines the data contained in a alarm message.
+   STRUCT
+      ProducerID : UInt;   // 0=Program_Alarm; 4=SysDiag; 6=Security; 8=GRAPH; 9=ProDiag
+      ID_1 : UInt;   // Client_Alarm_ID
+      ID_2 : UInt;   // ARID
+      PRIO : UInt;   // 0 .. 16
+      TimeStamp : LDT;
+      State : Byte;   // 0=Going; 1=Comming
+      LCID : UInt;   // LCID for Language
+      AlarmText : WString[254];   // Alarm text for Language
+   END_STRUCT;
+
+END_TYPE
+
+FUNCTION_BLOCK "tcpServer"
+TITLE = tcpServer
+{ S7_Optimized_Access := 'TRUE' }
+AUTHOR : z0023hdt
+FAMILY : communication
+VERSION : 0.1
+//starts a tcp ip server and listens for clients to connects. Connection status is passed via the interface. Once connected, the block can send data to the client.
+   VAR_INPUT 
+      start : Bool;
+      send : Bool;
+      alarmMessage : "alarmMessage";
+   END_VAR
+
+   VAR_OUTPUT 
+      connectionEstablished : Bool;
+      status : DWord;
+      sendError : Bool;
+   END_VAR
+
+   VAR 
+      TCON_Instance {OriginalPartName := 'T__CON'; LibVersion := '4.0'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : TCON;
+      TSEND_Instance {OriginalPartName := 'T__SEND'; LibVersion := '4.0'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : TSEND;
+      tconStat { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Struct
+         done { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;
+         bsy { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;
+         error { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;
+         status { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Word;
+      END_STRUCT;
+      TEST_1 { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : WString := WSTRING#'my test string';
+      statConnectionEstablished_1 { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;
+      T_DIAG_Instance {OriginalPartName := 'T_DIAG'; LibVersion := '1.2'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : T_DIAG;
+      TConData {OriginalPartName := 'TCON_IP_v4'; LibVersion := '1.0'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : TCON_IP_v4;
+      TDiagStatus { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Word;
+      TDiag_StatusExt {OriginalPartName := 'TDiag_StatusExt'; LibVersion := '1.0'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : TDiag_StatusExt;
+      TDISCON_Instance {OriginalPartName := 'T_DISCON'; LibVersion := '2.1'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : TDISCON;
+   END_VAR
+
+   VAR_TEMP 
+      stop : Bool;
+   END_VAR
+
+   VAR CONSTANT 
+      TEST : String;
+      PACKETLEN : UDInt := 218;
+   END_VAR
+
+
+BEGIN
+	(**************************************************************************************************************************
+	 
+	Titel :             tcpServer
+	Description :       TCP-Server waits for Clients and sends data to connected client.
+	                    
+	Copyright 2019      
+	Initiator :         A. Os.
+	
+	Status :            [ ] released :     Program code fully testet
+	                    [ ] testing :      Program code fully functional, being testet for functionality and error scenarios
+	                    [ ] developement : Program code in Developement
+	                    [x] proof of concept 
+	         
+	
+	****************************************************************************************************************************
+	Block Description
+	
+	Hardware plattform  [ ] S7-12xx [x] S7-15xx
+	Call Environment    [x] cyclic  [ ] start up  [ ] interrupt
+	
+	----------------------------------------------------------------------------------------------------------------------------
+	Status Description
+	----------------------------------------------------------------------------------------------------------------------------
+	@DESCRIPTION_STATUS@
+	Internal called Blocks with Status Description
+	
+	
+	
+	@DESCRIPTION_STATUS@
+	****************************************************************************************************************************
+	
+	@CHANGELOG@
+	Date           Version     Author               Desctiption
+	----------------------------------------------------------------------------------------------------------------------------
+	18.11.2019      0.0.1       A. Os.              First Version
+	
+	@CHANGELOG@
+	*)
+	
+	
+	//start tcp/ip server and wait for client
+	#TCON_Instance(REQ := #start,
+	               DONE => #tconStat.done,
+	               BUSY => #tconStat.bsy,
+	               ERROR => #tconStat.error,
+	               STATUS => #tconStat.status,
+	               CONNECT := #TConData,
+	               ID := 1);
+	
+	//terminate connection on negative level
+	IF #start = 1 THEN
+	    #stop := 0;
+	ELSE
+	    #stop := 1;
+	END_IF;
+	#TDISCON_Instance(REQ := #stop,
+	                    ID := 1);
+	
+	//evaluate the connection status to detect any interruption
+	#T_DIAG_Instance(REQ := 0,
+	                 ID := 1,
+	                 STATUS => #TDiagStatus,
+	                 RESULT := #TDiag_StatusExt);
+	#T_DIAG_Instance(REQ := 1,
+	                 ID := 1,
+	                 STATUS => #TDiagStatus,
+	                 RESULT := #TDiag_StatusExt);
+	
+	IF #TDiag_StatusExt.State = 4 THEN
+	    // Statement section IF
+	    #statConnectionEstablished_1 := 1;
+	ELSE
+	    #statConnectionEstablished_1 := 0;
+	END_IF;
+	
+	#connectionEstablished := #statConnectionEstablished_1;
+	
+	//when new data is available, send to client
+	#TSEND_Instance(REQ := #send,
+	                ID := 1,
+	                LEN := #PACKETLEN,
+	                ERROR => #sendError,
+	                DATA := #alarmMessage);
+	
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK "alarmBuffer"
+TITLE = alarmBuffer
+{ S7_Optimized_Access := 'TRUE' }
+AUTHOR : z0023hdt
+FAMILY : Buffering
+VERSION : 0.1
+//Buffers Alarms received via the data-INPUT in an Array. Just One-Way, no reading back.
+   VAR_INPUT 
+      newData : Bool;
+      data : "alarmMessage";
+   END_VAR
+
+   VAR_OUTPUT 
+      overflow : Bool;
+   END_VAR
+
+   VAR 
+      alarmBuffer { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Array[0..#BUFFERARRAYLIMIT] of "alarmMessage";
+      alarmBufferCounter { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'; S7_SetPoint := 'True'} : Int;
+   END_VAR
+
+   VAR CONSTANT 
+      BUFFERARRAYLIMIT : Int := 9;
+   END_VAR
+
+
+BEGIN
+	(**************************************************************************************************************************
+	 
+	Titel :             alarmBuffer
+	Description :       Buffers data provided on "data"-Input. Only One-Way, no Output.
+	                    
+	Copyright 2019      
+	Initiator :         A. Os.
+	
+	Status :            [ ] released :     Program code fully testet
+	                    [ ] testing :      Program code fully functional, being testet for functionality and error scenarios
+	                    [ ] developement : Program code in Developement
+	                    [x] proof of concept 
+	         
+	
+	****************************************************************************************************************************
+	Block Description
+	
+	Hardware plattform  [ ] S7-12xx [x] S7-15xx
+	Call Environment    [x] cyclic  [ ] start up  [ ] interrupt
+	
+	----------------------------------------------------------------------------------------------------------------------------
+	Status Description
+	----------------------------------------------------------------------------------------------------------------------------
+	@DESCRIPTION_STATUS@
+	Internal called Blocks with Status Description
+	
+	
+	
+	@DESCRIPTION_STATUS@
+	****************************************************************************************************************************
+	
+	@CHANGELOG@
+	Date           Version     Author               Desctiption
+	----------------------------------------------------------------------------------------------------------------------------
+	18.11.2019      0.0.1       A. Os.              First Version
+	
+	@CHANGELOG@
+	*)
+	
+	IF #newData THEN
+	    // Statement section IF
+	    IF #alarmBufferCounter <= #BUFFERARRAYLIMIT THEN
+	        #alarmBuffer[#alarmBufferCounter] := #data;
+	        #alarmBufferCounter := #alarmBufferCounter + 1;
+	        #overflow := 0;
+	    ELSE
+	        #alarmBufferCounter := 0;
+	        #alarmBuffer[#alarmBufferCounter] := #data;
+	        #overflow := 1;
+	    END_IF;
+	    ;
+	END_IF;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK "alarmServer"
+TITLE = alarmServer
+{ S7_Optimized_Access := 'TRUE' }
+AUTHOR : z0023hdt
+FAMILY : alarming
+VERSION : 0.1
+//connects to the plc internal alarms and passes it to connected clients.
+   VAR_INPUT 
+      startServer : Bool;
+      simulate : Bool;
+   END_VAR
+
+   VAR 
+      tcpServer_Instance { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : "tcpServer";
+      Get_Alarm_Instance {OriginalPartName := 'Get_Alarm_FB_702_S71500'; LibVersion := '1.4'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Get_Alarm;
+      gaAlarmData {OriginalPartName := 'AlarmData'; LibVersion := '1.0'; ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : AlarmData;
+      alarmMessage { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : "alarmMessage";
+      gaLcID { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Array[0..2] of UDInt := 3;   // 0=all languages;1=first language with the smallest LC number;2=+second language;3=+third language;or exact LC number to choose a specific language
+      gaOPMode { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Byte;   // 1=Sign in;2=Read Data;3=Sign off
+      gaStatus { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Word;   // 0000= No error; 0001= New data is available; 8XXX=ERROR
+      gaDspClass { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Array[0..31] of UInt := 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0, 255, 256;   // 0..16=Display Class Numbers as in context of HMI;257=SysDiag;259=Security;Without wiring this input parameter: all alarms
+      gaDataReady { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;
+      gaError { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;
+      gaInit { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;
+      clientConnected { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Bool;
+      alarmBuffer_Instance : "alarmBuffer";
+   END_VAR
+
+   VAR CONSTANT 
+      TESTSTRING : String := 'this is my test string';
+      DM_ALARMWITHTEXT : Byte := 1;   // 0=Only Header: Producer-ID, ID_1, ID_2, Prio, Timestamp, State;1=Alarm text incl. associated values;2=Information text, additional text;3=Alarm text incl. associated values & information text, additional text
+   END_VAR
+
+
+BEGIN
+	(**************************************************************************************************************************
+	 
+	Titel :             alarmServer
+	Description :       Reads out PLC-Alarms, and sends them to connected TCP-Clients.
+	                    
+	Copyright 2019      
+	Initiator :         A. Os.
+	
+	Status :            [ ] released :     Program code fully testet
+	                    [ ] testing :      Program code fully functional, being testet for functionality and error scenarios
+	                    [ ] developement : Program code in Developement
+	                    [x] proof of concept 
+	         
+	
+	****************************************************************************************************************************
+	Block Description
+	
+	Hardware plattform  [ ] S7-12xx [x] S7-15xx
+	Call Environment    [x] cyclic  [ ] start up  [ ] interrupt
+	
+	----------------------------------------------------------------------------------------------------------------------------
+	Status Description
+	----------------------------------------------------------------------------------------------------------------------------
+	@DESCRIPTION_STATUS@
+	Internal called Blocks with Status Description
+	
+	
+	
+	@DESCRIPTION_STATUS@
+	****************************************************************************************************************************
+	
+	@CHANGELOG@
+	Date           Version     Author               Desctiption
+	----------------------------------------------------------------------------------------------------------------------------
+	18.11.2019      0.0.1       A. Os.              First Version
+	
+	@CHANGELOG@
+	*)
+	
+	
+	//start TCP/IP Server and wait for clients to establish connection
+	//Send current alarm data to Client
+	
+	#tcpServer_Instance(start := #startServer,
+	                    send := #gaDataReady,
+	                    alarmMessage := #alarmMessage,
+	                    connectionEstablished => #clientConnected);
+	
+	//when connection is esatablished, start GET_Alarm
+	IF #clientConnected = 1 OR #simulate = 1 THEN
+	    IF #gaStatus = 16#8001 OR #gaStatus = 16#8085 THEN
+	        
+	        #gaOPMode := 1;
+	    ELSE
+	        #gaOPMode := 2;
+	    END_IF;
+	ELSE
+	    #gaOPMode := 3;
+	END_IF;
+	
+	//Read Alarms in one language
+	#Get_Alarm_Instance(OperateMode := #gaOPMode,
+	                    DataMode := #DM_ALARMWITHTEXT,
+	                    DispClassNr := #gaDspClass,
+	                    Lcid := #gaLcID[0],
+	                    DataReady => #gaDataReady,
+	                    Error => #gaError,
+	                    Init => #gaInit,
+	                    Status => #gaStatus,
+	                    Data := #gaAlarmData);
+	
+	//Copy Alarm Data to Message for transfer to Alarming System
+	#alarmMessage.ProducerID := #gaAlarmData.ProducerID;
+	#alarmMessage.ID_1 := #gaAlarmData.ID_1;
+	#alarmMessage.ID_2 := #gaAlarmData.ID_2;
+	#alarmMessage.PRIO := #gaAlarmData.PRIO;
+	#alarmMessage.TimeStamp := #gaAlarmData.TimeStamp;
+	#alarmMessage.State := #gaAlarmData.State;
+	#alarmMessage.LCID := #gaAlarmData.LCID[0];
+	#alarmMessage.AlarmText := #gaAlarmData.AlarmText[0];
+	
+	
+	//Alarm Buffer for simulation of Alarming Behaviour
+	#alarmBuffer_Instance(newData := #gaDataReady,
+	                      data := #alarmMessage);
+	
+END_FUNCTION_BLOCK
+
